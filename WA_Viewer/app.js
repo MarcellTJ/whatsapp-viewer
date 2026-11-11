@@ -19,7 +19,7 @@ const GDRIVE={
   clientId:'961123631368-09d3gj7it7rsdb7r0645f5k6rf5tpatl.apps.googleusercontent.com',
   scope:'https://www.googleapis.com/auth/drive.readonly',
   folder:'Purissa_WA_Logs',
-  file:'all.csv'
+  file:'wa_logs_2026.csv'
 };
 let gToken=null,gTokenExp=0,gClient=null,gPending=null;
 
