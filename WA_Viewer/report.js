@@ -13,7 +13,43 @@ const exportFields=[
 ];
 const exportDialog=document.createElement('dialog');exportDialog.id='exportDialog';exportDialog.setAttribute('aria-labelledby','exportTitle');
 exportDialog.innerHTML='<form id="exportForm"><div class="modal-top"><h2 id="exportTitle">Export a PDF report</h2><button type="button" id="exportClose" aria-label="Close export">×</button></div><p>Choose exactly what to include. Your report is created on this device.</p><label class="report-label">Report title<input id="reportTitle" maxlength="160" value="Contact activity report"></label><div class="report-grid"><label class="report-label">Contacts<select id="reportScope"><option value="all">All contacts</option><option value="search">Current search results</option><option value="custom">Choose contacts</option></select></label><label class="report-label">Order<select id="reportOrder"><option value="recent">Latest activity first</option><option value="oldest">First contact first</option><option value="count">Most interactions</option><option value="name">Contact name / number</option></select></label><label class="report-label">From date<input type="date" id="reportFrom"></label><label class="report-label">Through date<input type="date" id="reportTo"></label></div><div id="reportContactSection" hidden><div class="selection-actions"><b>Select contacts</b><button type="button" id="contactAll">Select all</button><button type="button" id="contactNone">Clear</button></div><div id="reportContacts"></div></div><p class="footnote">Date filters apply to every count, first/last timestamp, and history entry in this report. Leave dates blank for all time.</p><div class="selection-actions"><b>Report contents</b><button type="button" id="fieldsAll">Include all</button><button type="button" id="fieldsNone">Exclude all</button></div><div class="report-fields">'+exportFields.map(([id,label,on])=>'<label><input type="checkbox" name="field" value="'+id+'" '+(on?'checked':'')+'>'+label+'</label>').join('')+'</div><div class="report-grid"><label class="report-label">Paper size<select id="reportPaper"><option>A4</option><option>Letter</option></select></label><label class="report-label">Orientation<select id="reportOrientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label><label class="report-label">History order<select id="historyOrder"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label><label class="report-check"><input type="checkbox" id="reportMask">Mask phone numbers</label></div><p id="reportPreview" role="status"></p><p id="reportError" role="alert"></p><div class="export-actions"><button type="button" id="exportCancel" class="secondary">Cancel</button><button type="submit" class="primary" id="printReport">Continue to PDF</button></div><p class="footnote">In the print window, choose “Save as PDF”. Turn off browser headers and footers if you do not want the page address or date added.</p></form>';
+// Keep export controls and preview in separate, independently scrollable panes.
+const exportLayout=document.createElement('div');exportLayout.className='export-layout';
+const exportControls=document.createElement('div');exportControls.className='export-controls';
+exportControls.append(exportDialog.firstElementChild);
+const previewPane=document.createElement('div');previewPane.className='report-preview-pane';
+previewPane.innerHTML='<div class="preview-toolbar"><div><b>Live report preview</b><small>Updates as you change export options</small></div><span id="previewPaperLabel">A4 · Portrait</span></div><div class="preview-scroll" id="previewScroll"><div class="preview-sheet" id="previewSheet"><iframe id="reportLiveFrame" title="Live PDF report preview" sandbox="allow-same-origin"></iframe></div></div><p class="preview-caption">Content preview. Final page breaks are applied by your browser when saving as PDF.</p>';
+exportLayout.append(exportControls,previewPane);exportDialog.append(exportLayout);
 document.body.append(exportDialog);
+const liveFrame=$('reportLiveFrame');let previewObserver=null,previewHeight=0,previewWidth=794;
+function fitReportPreview(){
+ const available=$('previewScroll').clientWidth-36;
+ if(available<=0)return;
+ const scale=Math.min(1,available/previewWidth);
+ liveFrame.style.width=previewWidth+'px';liveFrame.style.height=previewHeight+'px';
+ liveFrame.style.transform='scale('+scale+')';
+ $('previewSheet').style.width=(previewWidth*scale)+'px';
+ $('previewSheet').style.height=(previewHeight*scale)+'px';
+}
+liveFrame.onload=()=>{
+ const doc=liveFrame.contentDocument;if(!doc)return;
+ previewObserver?.disconnect();
+ const measure=()=>{previewHeight=Math.max(doc.body.scrollHeight+120,Number(liveFrame.dataset.minHeight)||1123);fitReportPreview()};
+ measure();previewObserver=new ResizeObserver(measure);previewObserver.observe(doc.body);
+};
+new ResizeObserver(fitReportPreview).observe($('previewScroll'));
+function showLiveReport(html,o){
+ const dimensions=o.paper==='Letter'?[816,1056]:[794,1123];
+ if(o.orientation==='landscape')dimensions.reverse();
+ previewWidth=dimensions[0];previewHeight=dimensions[1];
+ liveFrame.dataset.minHeight=String(previewHeight);
+ $('previewPaperLabel').textContent=o.paper+' · '+(o.orientation==='landscape'?'Landscape':'Portrait');
+ const screenStyle='<style>@media screen{html{background:white}body{margin:0;padding:60px;min-height:'+previewHeight+'px}}</style>';
+ liveFrame.srcdoc=html.replace('</head>',screenStyle+'</head>');fitReportPreview();
+}
+function showPreviewMessage(message,o){
+ showLiveReport('<!doctype html><html><head><meta charset="utf-8"><style>body{font:16px Arial;color:#7a8980;line-height:1.6}</style></head><body><h2>No report to preview</h2><p>'+esc(message)+'</p></body></html>',o);
+}
 function reportOptions(){return {fields:new Set([...exportDialog.querySelectorAll('[name=field]:checked')].map(i=>i.value)),title:$('reportTitle').value,scope:$('reportScope').value,query:$('search').value,selected:new Set([...exportDialog.querySelectorAll('[name=contact]:checked')].map(i=>i.value)),from:$('reportFrom').value,to:$('reportTo').value,order:$('reportOrder').value,historyOrder:$('historyOrder').value,mask:$('reportMask').checked,paper:$('reportPaper').value,orientation:$('reportOrientation').value}}
 function reportData(source,o){
  if(o.from&&o.to&&o.from>o.to)throw Error('The start date must be on or before the end date.');
@@ -38,8 +74,19 @@ function reportHTML(list,o){
  if(!body.trim())throw Error('Select at least one report detail to include.');
  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>'+esc(has('title')?o.title:'Report')+'</title><style>@page{size:'+o.paper+' '+o.orientation+';margin:16mm}*{box-sizing:border-box}body{font:11px Arial,sans-serif;color:#253a2d;margin:0;line-height:1.5}h1{font-size:25px;margin:0 0 10px}h2{font-size:16px;margin-top:26px;border-bottom:1px solid #d9e4dc;padding-bottom:8px;break-after:avoid}h3{font-size:12px;margin-top:20px;break-after:avoid}p{color:#6f7e73;font-size:10px}dl{display:flex;flex-wrap:wrap;gap:18px}dl div{padding:10px;background:#f1f5f2;min-width:125px}dt{font-size:10px;color:#6f7e73}dd{margin:5px 0 0;font-size:15px}table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;margin:10px 0 20px}thead{display:table-header-group}th{text-align:left;background:#eef4ef;color:#52705a}th,td{padding:9px;border-bottom:1px solid #e1e8e2;overflow-wrap:anywhere}tr{break-inside:avoid}.note{margin-top:24px;border-top:1px solid #e1e8e2;padding-top:12px}</style></head><body>'+body+'</body></html>'
 }
-function updateReportPreview(){try{const o=reportOptions(),list=reportData(records,o);$('reportPreview').textContent=list.length+' contacts · '+list.reduce((n,g)=>n+g.items.length,0)+' interactions in this report';$('reportError').textContent='';$('printReport').disabled=!list.length}catch(e){$('reportError').textContent=e.message;$('printReport').disabled=true}}
-$('export').onclick=()=>{$('reportContacts').replaceChildren();for(const g of groups()){const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.name='contact';input.value=normalize(g.contact);input.checked=true;label.append(input,document.createTextNode(g.contact));$('reportContacts').append(label)}updateReportPreview();exportDialog.showModal()};
+function updateReportPreview(){
+ const o=reportOptions();
+ try{
+  const list=reportData(records,o);
+  $('reportPreview').textContent=list.length+' contacts · '+list.reduce((n,g)=>n+g.items.length,0)+' interactions in this report';
+  if(!list.length)throw Error('No interactions match your export filters.');
+  const html=reportHTML(list,o);
+  $('reportError').textContent='';$('printReport').disabled=false;showLiveReport(html,o);
+ }catch(e){
+  $('reportPreview').textContent='Adjust the options to preview your report.';$('reportError').textContent=e.message;$('printReport').disabled=true;showPreviewMessage(e.message,o);
+ }
+}
+$('export').onclick=()=>{$('reportContacts').replaceChildren();for(const g of groups()){const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.name='contact';input.value=normalize(g.contact);input.checked=true;label.append(input,document.createTextNode(g.contact));$('reportContacts').append(label)}exportDialog.showModal();updateReportPreview()};
 $('exportClose').onclick=$('exportCancel').onclick=()=>exportDialog.close();
 $('reportScope').onchange=()=>{$('reportContactSection').hidden=$('reportScope').value!=='custom';updateReportPreview()};
 for(const [id,selector,checked]of [['fieldsAll','[name=field]',true],['fieldsNone','[name=field]',false],['contactAll','[name=contact]',true],['contactNone','[name=contact]',false]])$(id).onclick=()=>{exportDialog.querySelectorAll(selector).forEach(i=>i.checked=checked);updateReportPreview()};
